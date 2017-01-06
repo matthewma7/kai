@@ -1,0 +1,163 @@
+<html>
+<head>
+	<title>Kai</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<link rel="apple-touch-icon" sizes="57x57" href="/apple-touch-icon-57x57.png">
+	<link rel="apple-touch-icon" sizes="60x60" href="/apple-touch-icon-60x60.png">
+	<link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32">
+	<link rel="icon" type="image/png" href="/favicon-16x16.png" sizes="16x16">
+	<link rel="manifest" href="/manifest.json">
+	<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+	<meta name="msapplication-TileColor" content="#da532c">
+	<meta name="theme-color" content="#ffffff">
+	<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.0/jquery.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.6/js/bootstrap.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-slider/6.0.9/bootstrap-slider.min.js"></script>
+	<script src="/socket.io/socket.io.js"></script>
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.6/css/bootstrap.min.css">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-slider/6.0.9/css/bootstrap-slider.css">
+
+	<style>
+		.slider{
+			width:100% !important;
+			/*overflow: hidden;*/
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<div clsss="row">
+			<div class="col-xs-12" style="text-align:center;">
+				<h2>Kai</h2>
+				<h5><span>Mode: </span><span class="mode">N/A</span> <span> Temperature: </span><span class="currentTemperature">N/A</span></h5>
+				<h5 class="lastHoldRequest"></h5>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-offset-4 col-md-4 col-xs-offset-1 col-xs-10">
+				<div class="" style="margin-top:20px;">Temperature (°F):</div>
+				<input class="slider" id="temperature-slider" data-slider-id='ex1Slider' type="text" data-slider-min="50" data-slider-max="95" data-slider-step="1"/>
+				<div class="" style="margin-top:15px;">Duration (Minutes):</div>
+				<input class="slider" id="duration-slider" data-slider-id='ex2Slider' type="text" data-slider-min="0" data-slider-max="185" data-slider-step="5"/>
+				<div style="text-align:center;margin-top:10px;">
+					<button type="button" class="btn btn-primary request-button" style="width:80px;">Hold</button>
+					<button type="button" class="btn btn-primary run-button" style="width:80px;">Run</button>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script>
+		var temperatureInitValue = localStorage.getItem("kai.lastHoldTemperature");
+		temperatureInitValue = temperatureInitValue ? parseInt(temperatureInitValue) : 70; 
+		var durationInitValue = localStorage.getItem("kai.lastHoldDuration");
+		durationInitValue = durationInitValue ? parseInt(durationInitValue) : 90;
+		var mode = null;
+		$("#temperature-slider").slider({
+			tooltip: 'always',
+			value: temperatureInitValue
+		});
+		$("#duration-slider").slider({
+			tooltip: 'always',
+			// scale: 'logarithmic',
+			value: durationInitValue,
+			formatter: function(value){
+				if(value == 185){
+					return "Always";
+				}
+				else{
+					return value;
+				}
+			}
+		});
+
+		function tryGetHoldRequest(){
+			Promise.resolve($.ajax({
+				url:"status",
+				dataType:"json"
+			}))
+			.then(function(data){
+				var holdRequest = data.holdRequest;
+				if(holdRequest){
+					var output = holdRequest.temperature + "°F is in effect";
+					if(holdRequest.duration){
+						var time = new Date(holdRequest.time);
+						var endTime = new Date((new Date(holdRequest.time)).getTime() + holdRequest.duration * 1000);
+						var output = output + " until " + endTime.toLocaleTimeString();
+					}					
+					$(".lastHoldRequest").text(output);
+				}
+				else{
+					$(".lastHoldRequest").text("");
+				}				
+			})
+		}
+		tryGetHoldRequest();
+
+		function getProperty(obj, properties){
+			var root = obj;
+			for(var i=0; i < properties.length; i++){
+				root = root[properties[i]];
+				if(root == undefined){
+					return root;
+				}
+			}
+			return root;
+		}
+		
+
+		$(".request-button").click(function(e){
+			var temperatureSliderValue = $("#temperature-slider").val();
+			var durationSliderValue = $("#duration-slider").val();
+			var holdRequest = {
+				temperature: parseInt(temperatureSliderValue),
+				mode: mode
+			};
+			if(durationSliderValue != "185"){
+				holdRequest.duration = parseInt(durationSliderValue) * 60
+			}
+			Promise.resolve($.ajax({
+				url:"hold",
+				method:"post",
+				contentType: 'application/json; charset=utf-8',
+				data:JSON.stringify(holdRequest)
+			}))
+			.then(function(data){
+				localStorage.setItem("kai.lastHoldTemperature", temperatureSliderValue);
+				localStorage.setItem("kai.lastHoldDuration", durationSliderValue);
+				tryGetHoldRequest();
+			})
+			.catch(function(){
+				console.log(arguments);
+			})
+		});
+
+
+		$(".run-button").click(function(e){
+			Promise.resolve($.ajax({
+				url:"resume",
+				method:"post",
+				contentType: 'application/json; charset=utf-8'
+			}))
+			.then(function(data){
+				tryGetHoldRequest();
+			})
+		});
+
+		var socket = io.connect();
+		socket.on('status', function (status) {
+			console.log("receive status");
+			console.log(status);
+			var thermoStatus = status["A"][1];
+			var temperature = getProperty(thermoStatus, ["OperationalStatus", "Temperature"]);
+			if(temperature != undefined){
+				$(".currentTemperature").text(temperature.F);
+			}
+			var systemMode = getProperty(thermoStatus, ["EnvironmentControls", "SystemMode"]);
+			if(systemMode){
+				mode = systemMode;
+				$('.mode').text(systemMode);
+			}
+		});
+	</script>
+</body>
+</html>
